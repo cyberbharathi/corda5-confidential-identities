@@ -1,17 +1,19 @@
-apply plugin: 'net.corda.plugins.cordapp'
-apply plugin: 'net.corda.plugins.quasar-utils'
+plugins {
+    id 'net.corda.plugins.cordapp-cpk'
+}
 
 cordapp {
-    signing {
-        enabled false
-    }
     targetPlatformVersion corda_platform_version.toInteger()
-    minimumPlatformVersion corda_platform_version.toInteger()
+    minimumPlatformVersion 11
+
+    signing {
+        enabled = false
+    }
     workflow {
-        name "Confidential Identities Workflows"
-        vendor "Corda Open Source"
-        licence "Apache License, Version 2.0"
-        versionId 1
+        name = 'Confidential Identities Workflows'
+        versionId = 2
+        licence = 'Apache License, Version 2.0'
+        vendor = 'Corda Open Source'
     }
 }
 
@@ -39,22 +41,20 @@ sourceSets {
 
 configurations {
     integrationTestCompile.extendsFrom testCompile
-    integrationTestRuntime.extendsFrom testRuntime 
+    integrationTestRuntime.extendsFrom testRuntime
 }
 
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     testCompile "org.jetbrains.kotlin:kotlin-test:$kotlin_version"
-    testCompile "junit:junit:$junit_version"
 
     // Corda dependencies.
-    cordaCompile "$corda_release_group:corda-core:$corda_release_version"
-    cordaRuntime "$corda_release_group:corda:$corda_release_version"
-    testCompile "$corda_release_group:corda-node-driver:$corda_release_version"
+    cordaProvided "$corda_release_group:corda-application:$corda_release_version"
+    cordaProvided "$corda_release_group:corda-ledger:$corda_release_version"
+    cordaProvided "$corda_release_group:corda-crypto-api:$corda_release_version"
 
     testCompile "$tokens_release_group:tokens-contracts:$tokens_sdk_version"
     testCompile "$tokens_release_group:tokens-workflows:$tokens_sdk_version"
-    testCompile "$tokens_release_group:tokens-money:$tokens_sdk_version"
 }
 
 task integrationTest(type: Test, dependsOn: []) {
