@@ -1,20 +1,24 @@
 package com.r3.corda.lib.ci.workflows
 
+import com.r3.corda.lib.ci.services.SignedKeyService
 import net.corda.v5.application.flows.Flow
 import net.corda.v5.application.flows.FlowException
 import net.corda.v5.application.flows.FlowSession
 import net.corda.v5.application.flows.flowservices.FlowIdentity
-import net.corda.v5.application.flows.flowservices.dependencies.CordaInject
+import net.corda.v5.application.flows.receive
+import net.corda.v5.application.flows.sendAndReceive
+import net.corda.v5.application.flows.unwrap
 import net.corda.v5.application.identity.AnonymousParty
 import net.corda.v5.application.identity.Party
-import net.corda.v5.application.node.services.IdentityService
-import net.corda.v5.application.node.services.KeyManagementService
-import net.corda.v5.application.node.services.TransactionSignatureVerificationService
-import net.corda.v5.application.serialization.deserialize
-import net.corda.v5.application.utilities.unwrap
+import net.corda.v5.application.injection.CordaInject
+import net.corda.v5.application.services.IdentityService
+import net.corda.v5.application.services.crypto.HashingService
+import net.corda.v5.application.services.crypto.KeyManagementService
+import net.corda.v5.application.services.serialization.SerializationService
+import net.corda.v5.application.services.serialization.deserialize
 import net.corda.v5.base.annotations.Suspendable
 import net.corda.v5.base.util.contextLogger
-import net.corda.v5.crypto.SecureHash
+import net.corda.v5.crypto.DigestAlgorithmName
 import net.corda.v5.ledger.UniqueIdentifier
 import java.security.PublicKey
 import java.util.*
@@ -82,12 +86,18 @@ private constructor(
     lateinit var identityService: IdentityService
 
     @CordaInject
-    lateinit var signatureVerifier: TransactionSignatureVerificationService
+    lateinit var serializationService: SerializationService
+
+    @CordaInject
+    lateinit var signedKeyService: SignedKeyService
+
+    @CordaInject
+    lateinit var hashingService: HashingService
 
     @Suspendable
     override fun call(): AnonymousParty {
         debug(REQUESTING_KEY)
-        val challengeResponseParam = SecureHash.randomSHA256()
+        val challengeResponseParam = hashingService.randomHash(DigestAlgorithmName.SHA2_256)
         // Handle whether a key is already specified or not and whether a UUID is specified, or not.
         val requestKey = when {
             key == null && uuid != null -> RequestKeyForUUID(challengeResponseParam, uuid)
@@ -98,13 +108,13 @@ private constructor(
         val signedKeyForAccount = session.sendAndReceive<SignedKeyForAccount>(requestKey).unwrap { it }
         // We need to verify the signature of the response and check that the payload is equal to what we expect.
         debug(VERIFYING_KEY)
-        verifySignedChallengeResponseSignature(signatureVerifier, signedKeyForAccount)
+        signedKeyService.verifySignedChallengeResponseSignature(signedKeyForAccount)
         debug(KEY_VERIFIED)
         // Ensure the hash of both challenge response parameters matches the received hashed function
         debug(VERIFYING_CHALLENGE_RESPONSE)
         val additionalParam = signedKeyForAccount.additionalChallengeResponseParam
-        val resultOfHashedParameters = challengeResponseParam.hashConcat(additionalParam)
-        require(resultOfHashedParameters == signedKeyForAccount.signedChallengeResponse.raw.deserialize()) {
+        val resultOfHashedParameters = hashingService.concatenate(challengeResponseParam, additionalParam)
+        require(resultOfHashedParameters == serializationService.deserialize(signedKeyForAccount.signedChallengeResponse.raw)) {
             "Challenge response invalid"
         }
         debug(CHALLENGE_RESPONSE_VERIFIED)
@@ -113,10 +123,10 @@ private constructor(
         val newKey = signedKeyForAccount.publicKey
         // Store a mapping of the key to the x500 name
         when (uuid) {
-            null -> identityService.registerKey(newKey, counterParty)
-            else -> identityService.registerKey(newKey, counterParty, uuid)
+            null -> identityService.registerKey(newKey, counterParty.name)
+            else -> identityService.registerKey(newKey, counterParty.name, uuid)
         }
-        return AnonymousParty(newKey)
+        return identityService.anonymousPartyFromKey(newKey)
     }
 }
 
@@ -133,13 +143,16 @@ class ProvideKeyFlow(private val otherSession: FlowSession) : Flow<AnonymousPart
     @CordaInject
     lateinit var flowIdentity: FlowIdentity
 
+    @CordaInject
+    lateinit var signedKeyService: SignedKeyService
+
     @Suspendable
     override fun call(): AnonymousParty {
         val key = when (
             val request = otherSession.receive<SendRequestForKeyMapping>().unwrap { it }
         ) {
             is RequestKeyForUUID -> {
-                val signedKey = keyManagementService.createSignedOwnershipClaimFromUUID(
+                val signedKey = signedKeyService.createSignedOwnershipClaimFromUUID(
                     challengeResponseParam = request.challengeResponseParam,
                     uuid = request.externalId
                 )
@@ -148,17 +161,17 @@ class ProvideKeyFlow(private val otherSession: FlowSession) : Flow<AnonymousPart
                 signedKey.publicKey
             }
             is RequestForKnownKey -> {
-                val signedKey = keyManagementService.createSignedOwnershipClaimFromKnownKey(
+                val signedKey = signedKeyService.createSignedOwnershipClaimFromKnownKey(
                     challengeResponseParam = request.challengeResponseParam,
                     knownKey = request.knownKey
                 )
                 otherSession.send(signedKey)
                 // Double check that the key has not already been registered to another node.
                 try {
-                    identityService.registerKey(request.knownKey, flowIdentity.ourIdentity)
+                    identityService.registerKey(request.knownKey, flowIdentity.ourIdentity.name)
                 } catch (e: Exception) {
                     throw FlowException(
-                        "Could not register a new key for party: ${flowIdentity.ourIdentity} as the provided public " +
+                        "Could not register a new key for party: ${flowIdentity.ourIdentity.name} as the provided public " +
                                 "key is already registered or registered to a different party."
                     )
                 }
@@ -167,7 +180,7 @@ class ProvideKeyFlow(private val otherSession: FlowSession) : Flow<AnonymousPart
             is RequestFreshKey -> {
                 // No need to call RegisterKey as it's done by keyManagementService.freshKey.
                 val newKey = keyManagementService.freshKey()
-                val signedKey = keyManagementService.createSignedOwnershipClaimFromKnownKey(
+                val signedKey = signedKeyService.createSignedOwnershipClaimFromKnownKey(
                     challengeResponseParam = request.challengeResponseParam,
                     knownKey = newKey
                 )
@@ -176,6 +189,6 @@ class ProvideKeyFlow(private val otherSession: FlowSession) : Flow<AnonymousPart
             }
         }
 
-        return AnonymousParty(key)
+        return identityService.anonymousPartyFromKey(key)
     }
 }

@@ -27,9 +27,10 @@ plugins {
     id 'jacoco'
     id "com.jfrog.artifactory" version "$jfrogArtifactoryPluginVersion"
     id 'io.gitlab.arturbosch.detekt' version "$detektVersion"
+    id 'java-library'
 }
 
-allprojects {
+subprojects {
     if (System.getenv("RELEASE_VERSION")?.trim()) {
         version = System.getenv("RELEASE_VERSION")
     } else {
@@ -49,12 +50,17 @@ allprojects {
         maven { url "$artifactoryContextUrl/corda-dependencies" }
         //needed for C5 binaries
         maven {
-            url = "$artifactoryContextUrl/corda-os-maven-unstable"
+            url = "$artifactoryContextUrl/corda-os-maven-stable-local"
             credentials {
                 username = cordaArtifactoryUsername
                 password = cordaArtifactoryPassword
             }
         }
+    }
+
+    java {
+        sourceCompatibility = VERSION_11
+        targetCompatibility = VERSION_11
     }
 
     tasks.withType(KotlinCompile) {
@@ -81,6 +87,13 @@ allprojects {
         }
     }
 }
+tasks.register('compileAll') { task ->
+    description = "Compiles all the Kotlin and Java classes, including all of the test classes."
+    group = "verification"
+
+    task.dependsOn tasks.withType(AbstractCompile)
+}
+
 
 def publishProjects = [project(":ci-workflows")]
 

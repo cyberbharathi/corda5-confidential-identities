@@ -1,39 +1,47 @@
 package net.corda.confidentialexchange.flows
 
 import com.r3.corda.lib.ci.workflows.RequestKey
+import com.r3.corda.lib.ci.workflows.SyncKeyMappingInitiator
 import net.corda.confidentialexchange.contracts.ExchangeableStateContract
 import net.corda.confidentialexchange.states.ExchangeableState
 import net.corda.systemflows.CollectSignaturesFlow
 import net.corda.systemflows.FinalityFlow
 import net.corda.systemflows.ReceiveFinalityFlow
+import net.corda.systemflows.SendTransactionFlow
 import net.corda.systemflows.SignTransactionFlow
 import net.corda.v5.application.flows.Flow
 import net.corda.v5.application.flows.FlowSession
 import net.corda.v5.application.flows.InitiatedBy
 import net.corda.v5.application.flows.InitiatingFlow
+import net.corda.v5.application.flows.JsonConstructor
+import net.corda.v5.application.flows.RpcStartFlowRequestParameters
 import net.corda.v5.application.flows.StartableByRPC
 import net.corda.v5.application.flows.flowservices.FlowEngine
 import net.corda.v5.application.flows.flowservices.FlowIdentity
 import net.corda.v5.application.flows.flowservices.FlowMessaging
-import net.corda.v5.application.flows.flowservices.dependencies.CordaInject
-import net.corda.v5.application.identity.Party
+import net.corda.v5.application.identity.AnonymousParty
+import net.corda.v5.application.identity.CordaX500Name
+import net.corda.v5.application.injection.CordaInject
+import net.corda.v5.application.services.IdentityService
+import net.corda.v5.application.services.json.JsonMarshallingService
+import net.corda.v5.application.services.json.parseJson
+import net.corda.v5.application.services.persistence.PersistenceService
 import net.corda.v5.base.annotations.Suspendable
-import net.corda.v5.ledger.services.NotaryAwareNetworkMapCache
-import net.corda.v5.ledger.services.TransactionService
-import net.corda.v5.ledger.services.VaultService
-import net.corda.v5.ledger.services.queryBy
-import net.corda.v5.ledger.services.vault.QueryCriteria
-import net.corda.v5.ledger.services.vault.builder
+import net.corda.v5.base.util.seconds
+import net.corda.v5.ledger.contracts.StateAndRef
+import net.corda.v5.ledger.services.NotaryLookupService
+import net.corda.v5.ledger.services.vault.IdentityStateAndRefPostProcessor
+import net.corda.v5.ledger.services.vault.StateStatus
 import net.corda.v5.ledger.transactions.SignedTransaction
+import net.corda.v5.ledger.transactions.SignedTransactionDigest
 import net.corda.v5.ledger.transactions.TransactionBuilderFactory
 import java.util.*
 
 @StartableByRPC
 @InitiatingFlow
-class ConfidentialMoveFlow(
-    val targetParty: Party,
-    val stateId : String,
-) : Flow<SignedTransaction> {
+class ConfidentialMoveFlow @JsonConstructor constructor(
+    val jsonParams: RpcStartFlowRequestParameters
+) : Flow<SignedTransactionDigest> {
 
     @CordaInject
     lateinit var flowIdentity: FlowIdentity
@@ -45,32 +53,48 @@ class ConfidentialMoveFlow(
     lateinit var flowMessaging: FlowMessaging
 
     @CordaInject
-    lateinit var networkMapCache: NotaryAwareNetworkMapCache
+    lateinit var notaryLookupService: NotaryLookupService
 
     @CordaInject
     lateinit var transactionBuilderFactory: TransactionBuilderFactory
 
     @CordaInject
-    lateinit var vaultService: VaultService
+    lateinit var persistenceService: PersistenceService
 
     @CordaInject
-    lateinit var transactionService: TransactionService
+    lateinit var jsonMarshallingService: JsonMarshallingService
+
+    @CordaInject
+    lateinit var identityService: IdentityService
+
 
     @Suspendable
-    override fun call() : SignedTransaction {
+    override fun call() : SignedTransactionDigest {
+        val params : Map<String, String> = jsonMarshallingService.parseJson(jsonParams.parametersInJson)
+        val recipient: CordaX500Name = CordaX500Name.parse(params["recipient"]!!)
+        val linearId : String = params["linearId"]!!
+        val observer : String? = params["observer"]
+
+        val targetParty = identityService.partyFromName(recipient)
+        require(targetParty != null) {
+            "Target party not found for provided CordaX500Name: [$recipient]."
+        }
+
         val myIdentity = flowIdentity.ourIdentity
-        val notary = networkMapCache.notaryIdentities.single()
+        val notary = notaryLookupService.notaryIdentities.single()
 
         // Create confidential key pair
         val targetConfidentialIdentity = flowEngine.subFlow(RequestKey(targetParty))
 
         // Retrieve the state to move
-        val oldState = builder {
-            val query = QueryCriteria.LinearStateQueryCriteria(
-                uuid = listOf(UUID.fromString(stateId))
-            )
-            vaultService.queryBy<ExchangeableState>(query)
-        }.states.single()
+        val cursor = persistenceService.query<StateAndRef<ExchangeableState>>(
+            "LinearState.findByUuidAndStateStatus",
+            mapOf("uuid" to UUID.fromString(linearId), "stateStatus" to StateStatus.UNCONSUMED),
+            IdentityStateAndRefPostProcessor.POST_PROCESSOR_NAME
+        )
+        val oldState = cursor.poll(1, 20.seconds)
+            .values
+            .single()
 
         val newState : ExchangeableState = oldState.state.data.copy(owner = targetConfidentialIdentity)
 
@@ -84,12 +108,28 @@ class ConfidentialMoveFlow(
             verify()
         }
 
-        val stx = transactionService.signInitial(tb)
-        val targetSessions = mutableSetOf(flowMessaging.initiateFlow(targetConfidentialIdentity))
+        val targetSessions = mutableSetOf(
+            flowMessaging.initiateFlow(targetConfidentialIdentity)
+        )
 
-        val fullySignedTx = flowEngine.subFlow(CollectSignaturesFlow(stx, targetSessions))
+        val fullySignedTx = flowEngine.subFlow(CollectSignaturesFlow(tb.sign(), targetSessions))
 
-        return flowEngine.subFlow(FinalityFlow(fullySignedTx, targetSessions))
+        val notarisedTx = flowEngine.subFlow(FinalityFlow(fullySignedTx, targetSessions))
+
+        // Broadcast transaction to observer
+        observer?.let {
+            identityService.partyFromName(CordaX500Name.parse(observer))?.let {
+                // share confidential identities before sending
+                flowEngine.subFlow(SyncKeyMappingInitiator(it, notarisedTx.tx))
+                flowEngine.subFlow(SendTransactionFlow(flowMessaging.initiateFlow(it), notarisedTx))
+            }
+        }
+
+        return SignedTransactionDigest(
+            notarisedTx.id,
+            listOf(newState.toJsonString()),
+            notarisedTx.sigs
+        )
     }
 }
 
@@ -101,7 +141,15 @@ class ConfidentialMoveResponseFlow(private val counterPartySession: FlowSession)
     @Suspendable
     override fun call() {
         val signTransactionFlow = object : SignTransactionFlow(counterPartySession) {
+            @Suspendable
             override fun checkTransaction(stx: SignedTransaction) {
+                // For test purposes we are assuming the previous owner was anonymous and there was a single input state
+                val state = stateLoaderService.load(stx.inputs[0]).state.data as ExchangeableState
+                require(state.owner is AnonymousParty)
+
+                // share the confidential identity used for the input state
+                flowEngine.subFlow(SyncKeyMappingInitiator(counterPartySession.counterparty, listOf(state.owner)))
+
                 transactionMappingService.toLedgerTransaction(stx, false)
             }
         }

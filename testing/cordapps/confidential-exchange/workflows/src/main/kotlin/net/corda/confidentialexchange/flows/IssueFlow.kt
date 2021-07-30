@@ -4,19 +4,22 @@ import net.corda.confidentialexchange.contracts.ExchangeableStateContract.Comman
 import net.corda.confidentialexchange.states.ExchangeableState
 import net.corda.systemflows.FinalityFlow
 import net.corda.v5.application.flows.Flow
+import net.corda.v5.application.flows.JsonConstructor
+import net.corda.v5.application.flows.RpcStartFlowRequestParameters
 import net.corda.v5.application.flows.StartableByRPC
 import net.corda.v5.application.flows.flowservices.FlowEngine
 import net.corda.v5.application.flows.flowservices.FlowIdentity
-import net.corda.v5.application.flows.flowservices.dependencies.CordaInject
+import net.corda.v5.application.injection.CordaInject
 import net.corda.v5.base.annotations.Suspendable
-import net.corda.v5.ledger.services.NotaryAwareNetworkMapCache
+import net.corda.v5.ledger.services.NotaryLookupService
 import net.corda.v5.ledger.services.StatesToRecord
-import net.corda.v5.ledger.services.TransactionService
-import net.corda.v5.ledger.transactions.SignedTransaction
+import net.corda.v5.ledger.transactions.SignedTransactionDigest
 import net.corda.v5.ledger.transactions.TransactionBuilderFactory
 
 @StartableByRPC
-class IssueFlow : Flow<SignedTransaction> {
+class IssueFlow @JsonConstructor constructor(
+    @Suppress("UNUSED") val inputJson: RpcStartFlowRequestParameters
+): Flow<SignedTransactionDigest> {
 
     @CordaInject
     lateinit var flowIdentity: FlowIdentity
@@ -28,15 +31,12 @@ class IssueFlow : Flow<SignedTransaction> {
     lateinit var transactionBuilderFactory: TransactionBuilderFactory
 
     @CordaInject
-    lateinit var networkMapCache: NotaryAwareNetworkMapCache
-
-    @CordaInject
-    lateinit var transactionService: TransactionService
+    lateinit var notaryLookupService: NotaryLookupService
 
     @Suspendable
-    override fun call(): SignedTransaction {
+    override fun call(): SignedTransactionDigest {
         val myIdentity = flowIdentity.ourIdentity
-        val notary = networkMapCache.notaryIdentities.first()
+        val notary = notaryLookupService.notaryIdentities.first()
 
         val issuedState = ExchangeableState(myIdentity, myIdentity.anonymise())
 
@@ -46,8 +46,11 @@ class IssueFlow : Flow<SignedTransaction> {
             addCommand(Commands.Issue(), myIdentity.owningKey)
             verify()
         }
-
-        val stx = transactionService.signInitial(tb)
-        return flowEngine.subFlow(FinalityFlow(stx, emptyList(), StatesToRecord.ALL_VISIBLE))
+        val notarisedTx = flowEngine.subFlow(FinalityFlow(tb.sign(), emptyList(), StatesToRecord.ALL_VISIBLE))
+        return SignedTransactionDigest(
+            notarisedTx.id,
+            listOf(issuedState.toJsonString()),
+            notarisedTx.sigs
+        )
     }
 }
