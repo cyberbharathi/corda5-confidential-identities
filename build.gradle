@@ -7,7 +7,21 @@ plugins {
     id 'io.gitlab.arturbosch.detekt'
     id 'com.jfrog.artifactory'
     id 'jacoco'
+    id 'com.r3.internal.gradle.plugins.r3ArtifactoryPublish' apply true
+    id 'com.r3.internal.gradle.plugins.r3Publish' apply false
 }
+
+def revision = {
+    if (System.getenv("CORDA_REVISION")) {
+        return System.getenv("CORDA_REVISION")
+    }
+    try {
+        return "git rev-parse HEAD".execute().text.trim()
+    } catch (Exception error) {
+        logger.warn("git is unavailable in build environment", error)
+        "unknown"
+    }
+}()
 
 subprojects {
     if (System.getenv("RELEASE_VERSION")?.trim()) {
@@ -85,6 +99,17 @@ configure(publishProjects) { subproject ->
             archiveClassifier = 'javadoc'
             from javadoc.destinationDir
         }
+
+        tasks.withType(Jar).matching { !(it.name ==~ /cp[bk]/) }.configureEach {
+            manifest {
+                attributes("Corda-Release-Version": archiveVersion.get())
+                attributes("Corda-Platform-Version": corda_platform_version)
+                attributes("Corda-Revision": revision)
+                attributes("Automatic-Module-Name": "${confidential_id_release_group}.${project.name.replace('-', '.')}")
+                attributes("Corda-Docs-Link": "https://docs.r3.com/")
+                attributes("Corda-License": licenseUrl)
+            }
+        }
     }
 
     tasks.register('install') {
@@ -94,6 +119,7 @@ configure(publishProjects) { subproject ->
     publishing {
         publications {
             create(subproject.name, MavenPublication) {
+                evaluationDependsOn(subproject.path)
                 groupId subproject.group
                 artifactId subproject.name
 
@@ -108,7 +134,26 @@ configure(publishProjects) { subproject ->
                 }
 
                 pom {
+                    name = subproject.name
                     description = subproject.description
+                    url = 'https://github.com/corda/corda5-confidential-identities'
+                    licenses {
+                        license {
+                            name = licenseName
+                            url = licenseUrl
+                            distribution = licenseUrl
+                        }
+                    }
+                    developers {
+                        developer {
+                            id = 'R3'
+                            name = 'R3'
+                            email = 'dev@corda.net'
+                        }
+                    }
+                    scm {
+                        url = 'https://github.com/corda/corda5-confidential-identities'
+                    }
                 }
             }
         }
