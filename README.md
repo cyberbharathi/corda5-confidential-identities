@@ -28,8 +28,8 @@ installed locally:
 
     buildscript {
         ext {
-            corda_release_version = '4.3-RC01'
-            confidential_id_release_version = '1.0-RC02'
+            corda_release_version = '5.0.0-DevPreview-RC05'
+            confidential_id_release_version = '2.0-DevPreview-RC05'
             confidential_id_release_group = 'com.r3.corda.lib.ci'
         }
     }
@@ -45,20 +45,6 @@ Now, you can add the confidential identities dependencies to the `dependencies` 
 in each module of your CorDapp. In your workflow `build.gradle` add:
 
     cordaCompile "$confidential_id_release_group:ci-workflows:$confidential_id_release_version"
-
-If you want to use the `deployNodes` task, you will need to add the
-following dependency to your root `build.gradle` file:
-
-    cordapp "$confidential_id_release_group:ci-workflows:$confidential_id_release_version"
-
-These should also be added to the `deployNodes` task with the following syntax:
-
-    nodeDefaults {
-        projectCordapp {
-            deploy = false
-        }
-        cordapp("$confidential_id_release_group:ci-workflows:$confidential_id_release_version")
-    }
 
 ## Flows 
 

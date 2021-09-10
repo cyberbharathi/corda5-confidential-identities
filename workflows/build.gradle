@@ -16,6 +16,9 @@ cordapp {
         licence = 'Apache License, Version 2.0'
         vendor = 'Corda Open Source'
     }
+    signing {
+        enabled = true
+    }
 }
 
 tasks.named('jar', Jar) {
