@@ -4,5 +4,6 @@ cordaPipeline(
     runIntegrationTests: false,
     runE2eTests: true,
     e2eTestName: 'corda5-confidential-identities-e2e-tests',
-    nexusAppId: 'com.r3.corda.lib.ci-corda-5'
+    nexusAppId: 'com.r3.corda.lib.ci-corda-5',
+    nexusIqExcludePatterns: ['**/*-javadoc.jar', '**/*-sources.jar']
     )
