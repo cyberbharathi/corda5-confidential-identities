@@ -5,5 +5,6 @@ cordaPipeline(
     runE2eTests: true,
     e2eTestName: 'corda5-confidential-identities-e2e-tests',
     nexusAppId: 'com.r3.corda.lib.ci-corda-5',
-    nexusIqExcludePatterns: ['**/*-javadoc.jar', '**/*-sources.jar']
+    nexusIqExcludePatterns: ['**/*-javadoc.jar', '**/*-sources.jar'],
+    artifactoryRepoRoot: 'corda-os-maven-stable/com/r3/corda/lib/ci/'
     )
