@@ -23,22 +23,15 @@ identities in an application.
 
 ### Adding confidential identities dependencies to an existing CorDapp
 
-First, add a variable for the confidential identities version you wish to use and set the corda version that should've been 
-installed locally:
+First, add a variable for the confidential identities version you wish to use and set the corda version that
+works with this version of confidential indentities:
 
     buildscript {
         ext {
-            corda_release_version = '5.0.0-DevPreview'
-            confidential_id_release_version = '2.0.0-DevPreview'
+            corda_release_version = '5.0.0-DevPreview-1.*'
+            confidential_id_release_version = '2.0.0-DevPreview-1.*'
             confidential_id_release_group = 'com.r3.corda.lib.ci'
         }
-    }
-
-Second, you must add the confidential identities development artifactory repository to the
-list of repositories for your project:
-
-    repositories {
-        maven { url 'http://software.r3.com/artifactory/corda-lib-dev' }
     }
 
 Now, you can add the confidential identities dependencies to the `dependencies` block
