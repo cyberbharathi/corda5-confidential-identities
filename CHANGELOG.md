@@ -4,6 +4,10 @@
 
 # Changelog
 
+## Version 2.0.0-DevPreview-1.0
+
+* Ported to work with Corda 5.0.0-DevPreview-1.0
+
 ## Version 1.0
 
 * Added `RequestKeyFlow` and counter-flow `ProvideKeyFlow`, which allows a node to request a new `PublicKey` for use in
