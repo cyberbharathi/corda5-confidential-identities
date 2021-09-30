@@ -2,3 +2,5 @@
 #   these do not always line up with the location in the git repo
 ci-workflows
 ci-workflows/ci-workflows.corda.cpk
+
+client_secret = XXXXXXXXXXXXXXX
